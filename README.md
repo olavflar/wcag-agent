@@ -1,10 +1,10 @@
 # WCAG Testing Agent
 
-A local, Docker-based agent for automated WCAG (Web Content Accessibility Guidelines) testing of
-Altinn Studio app-frontend components. It drives headless Chromium via
-[Puppeteer](https://pptr.dev/) and scans rendered pages with
-[axe-core](https://github.com/dequelabs/axe-core), returning pass/violation/incomplete counts per
-scenario.
+Built for **[Altinn Studio](https://github.com/Altinn/altinn-studio)** — a local, Docker-based agent
+for automated WCAG (Web Content Accessibility Guidelines) testing of Altinn Studio app-frontend
+components. It drives headless Chromium via [Puppeteer](https://pptr.dev/) and scans rendered pages
+with [axe-core](https://github.com/dequelabs/axe-core), returning pass/violation/incomplete counts
+per scenario.
 
 ## Architecture
 
