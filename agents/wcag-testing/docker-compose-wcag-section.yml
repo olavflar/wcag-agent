@@ -1,0 +1,92 @@
+# Add this section to your docker-compose.local.yml
+
+services:
+  # WCAG Testing Agent
+  wcag-testing-agent:
+    build:
+      context: .
+      dockerfile: agents/wcag-testing/Dockerfile-wcag-testing
+    container_name: wcag-testing-agent
+    environment:
+      # Agent configuration
+      AGENT_NAME: wcag-testing-agent
+      AGENT_ENV: local
+
+      # Server configuration
+      SERVER_PORT: 3000
+      SERVER_HOST: 0.0.0.0
+
+      # Testing configuration
+      WCAG_LEVEL: AA
+      REPORT_FORMAT: html
+      LOG_LEVEL: info
+
+      # Redis configuration
+      REDIS_URL: redis://redis:6379
+
+      # Altinn Studio Mock
+      ALTINN_STUDIO_URL: http://altinn-studio-mock:3002
+
+      # Chromium configuration
+      CHROMIUM_BIN: /usr/bin/chromium-browser
+
+    ports:
+      - "3010:3000"  # WCAG Testing Agent API
+
+    volumes:
+      # Mount instructions for reference
+      - ./agents/wcag-testing/instructions.md:/home/agent/instructions.md:ro
+      # Mount agent manifest
+      - ./agents/wcag-testing/agent.yaml:/home/agent/agent.yaml:ro
+      # Volume for test reports
+      - wcag-testing-reports:/home/agent/reports
+      # Volume for temporary test apps
+      - wcag-testing-temp:/tmp/test-apps
+
+    networks:
+      - agent-network
+
+    depends_on:
+      - redis
+      - altinn-studio-mock
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Keep running for debugging
+    stdin_open: true
+    tty: true
+
+  # Mock Altinn Studio for testing
+  altinn-studio-mock:
+    image: node:20-alpine
+    container_name: altinn-studio-mock
+    working_dir: /app
+    volumes:
+      - ./scripts/altinn-studio-mock.js:/app/mock.js
+    ports:
+      - "3002:3002"
+    networks:
+      - agent-network
+    environment:
+      PORT: 3002
+    command: node /app/mock.js
+    depends_on:
+      - wcag-testing-agent
+
+# Add these volumes at the root level
+volumes:
+  wcag-testing-reports:
+    driver: local
+  wcag-testing-temp:
+    driver: local
+
+# Networks should already exist, but verify:
+networks:
+  agent-network:
+    driver: bridge

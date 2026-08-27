@@ -1,0 +1,232 @@
+apiVersion: agent.altinn.no/v1
+kind: Agent
+metadata:
+  name: wcag-testing-agent
+  namespace: default
+  version: "1.0.0"
+spec:
+  displayName: "WCAG Accessibility Testing Agent"
+  description: "Automated WCAG 2.1 testing for Altinn Studio components and applications"
+
+  # Agent identity
+  agent:
+    type: autonomous
+    purpose: "test"
+    owner: "ux-team"
+    tags:
+      - accessibility
+      - wcag
+      - testing
+      - qa
+
+  # Sandbox configuration - strict isolation for testing
+  sandbox:
+    enabled: true
+    level: strict
+
+    # Network access - only local services
+    network:
+      mode: allowlist
+      allowlist:
+        - localhost
+        - redis:6379
+        - altinn-studio-mock:3002
+      timeout: 30s
+
+    # Filesystem access - read-only instructions, write reports
+    filesystem:
+      mode: restricted
+      readOnly:
+        - /home/agent/instructions.md
+        - /home/agent/agent.yaml
+      readWrite:
+        - /home/agent/reports
+        - /tmp/test-apps
+      noAccess:
+        - /etc
+        - /root
+        - /home/agent/secrets
+
+    # Process isolation
+    process:
+      allowedBinaries:
+        - node
+        - npm
+        - axe
+      maxCpuPercent: 80
+      maxMemoryMb: 512
+
+  # Secrets and credentials - none for local phase
+  secrets:
+    management: mediated
+    required: []
+    optional: []
+
+  # Harness configuration
+  harness:
+    type: claude-code
+    model: claude-opus
+    temperature: 0.7
+    maxTokens: 4096
+
+  # Governance - classification and actions
+  governance:
+    # WCAG violation classification
+    classifications:
+      - name: critical-wcag-error
+        description: "Critical WCAG violation blocking accessibility"
+        confidence: 0.95
+        action: create-github-issue
+        severity: critical
+        wcagLevel: "A"
+
+      - name: major-wcag-error
+        description: "Major WCAG violation affecting users"
+        confidence: 0.90
+        action: create-github-issue
+        severity: major
+        wcagLevel: "AA"
+
+      - name: minor-wcag-issue
+        description: "Minor WCAG violation or best practice"
+        confidence: 0.80
+        action: flag-for-review
+        severity: minor
+        wcagLevel: "AAA"
+
+      - name: pass
+        description: "Component passes WCAG test"
+        confidence: 0.99
+        action: report-success
+        severity: none
+
+    # Approval workflow
+    approvals:
+      required: false
+      reviewer: ux-lead
+      timeout: 1h
+
+    # Audit trail
+    audit:
+      enabled: true
+      logLevel: info
+      retention: 30d
+
+  # GitHub integration for issue creation
+  github:
+    enabled: false  # Local only - would enable for cloud
+    org: ""
+    repo: ""
+    issueLabels:
+      - wcag-violation
+      - accessibility
+      - automated
+
+  # Issue templates for GitHub
+  issueTemplates:
+    critical-wcag-error:
+      title: "[WCAG CRITICAL] {{ component }} - {{ rule }}"
+      body: |
+        ## Accessibility Violation: {{ rule }}
+        **Level:** {{ wcagLevel }}
+        **Severity:** Critical
+        **WCAG Criterion:** {{ wcagCriterion }}
+
+        ### Issue
+        {{ description }}
+
+        ### Affected Component
+        - Component: {{ component }}
+        - Test Plan: {{ testPlan }}
+        - Failure Rate: {{ failureCount }}/{{ totalTests }}
+
+        ### Impact
+        {{ impact }}
+
+        ### How to Fix
+        {{ remediation }}
+
+        ### Test Evidence
+        ```
+        {{ testOutput }}
+        ```
+
+        ### Resources
+        - [WCAG {{ wcagLevel }} Guideline](https://www.w3.org/WAI/WCAG21/quickref/)
+        - [Testing Methodology]({{ testingDoc }})
+
+        **Test Run:** {{ timestamp }}
+        **Test Agent:** wcag-testing-agent
+        **Test ID:** {{ testId }}
+
+    minor-wcag-issue:
+      title: "[WCAG MINOR] {{ component }} - {{ rule }}"
+      body: |
+        ## Accessibility Enhancement: {{ rule }}
+        **Level:** {{ wcagLevel }}
+        **Severity:** Minor
+        **WCAG Criterion:** {{ wcagCriterion }}
+
+        ### Issue
+        {{ description }}
+
+        ### Affected Component
+        - Component: {{ component }}
+        - Test Plan: {{ testPlan }}
+
+        ### Recommended Fix
+        {{ remediation }}
+
+        **Test ID:** {{ testId }}
+
+  # Report configuration
+  reporting:
+    format:
+      - json
+      - html
+      - markdown
+    destination:
+      - /home/agent/reports
+      - slack  # Future: notify when critical
+
+    reportTemplate:
+      title: "WCAG Test Report"
+      includeMetrics: true
+      includeSummary: true
+      includeFindings: true
+      includeRecommendations: true
+
+  # Environment configuration
+  environment:
+    - name: AGENT_NAME
+      value: wcag-testing-agent
+    - name: AGENT_ENV
+      value: local
+    - name: LOG_LEVEL
+      value: info
+    - name: WCAG_LEVEL
+      value: AA
+    - name: REPORT_FORMAT
+      value: html
+    - name: REDIS_URL
+      value: redis://redis:6379
+    - name: ALTINN_STUDIO_URL
+      value: http://altinn-studio-mock:3002
+
+  # Health checks
+  healthcheck:
+    enabled: true
+    endpoint: /health
+    interval: 30s
+    timeout: 5s
+    retries: 3
+
+  # Metadata
+  metadata:
+    created: "2026-08-26"
+    lastModified: "2026-08-26"
+    createdBy: olav-friisberg-larssen@digdir.no
+    owner: ux-team
+    reviewers:
+      - ux-lead
+      - accessibility-expert

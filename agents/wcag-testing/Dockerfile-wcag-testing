@@ -1,0 +1,86 @@
+FROM debian:bookworm-slim
+
+# Set labels
+LABEL maintainer="Altinn UX Team"
+LABEL description="WCAG Accessibility Testing Agent for Altinn Studio"
+LABEL version="1.0.0"
+
+# Update and install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    jq \
+    wget \
+    gnupg \
+    build-essential \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20.x
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Chromium for axe-core testing (Debian ships a real, non-snap chromium
+# package for arm64 and amd64 — Ubuntu's "chromium-browser" is a snap stub that
+# does not run in containers, and Google Chrome has no linux/arm64 build)
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -s /bin/bash agent
+
+# Set working directory
+WORKDIR /home/agent
+
+# Copy package manifests
+COPY --chown=agent:agent agents/wcag-testing/package.json .
+
+# Tell puppeteer to use the system Chromium instead of downloading its own
+# (no linux/arm64 build of "Chrome for Testing" exists)
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Install Node dependencies
+RUN npm install --omit=dev
+
+# Install testing tools globally
+RUN npm install -g \
+    @axe-core/cli \
+    axe-core \
+    @axe-core/puppeteer \
+    puppeteer-extra \
+    puppeteer-extra-plugin-stealth
+
+# Copy agent files
+COPY --chown=agent:agent agents/wcag-testing/src/ ./src/
+COPY --chown=agent:agent agents/wcag-testing/instructions-wcag-testing.md ./instructions.md
+COPY --chown=agent:agent agents/wcag-testing/agent-wcag-testing.yaml ./agent.yaml
+
+# Create directories for reports
+RUN mkdir -p /home/agent/reports /tmp/test-apps && \
+    chown -R agent:agent /home/agent/reports /tmp/test-apps
+
+# Switch to non-root user
+USER agent
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Expose ports
+EXPOSE 3000
+
+# Default environment
+ENV NODE_ENV=production \
+    LOG_LEVEL=info \
+    WCAG_LEVEL=AA \
+    REPORT_FORMAT=html \
+    CHROMIUM_BIN=/usr/bin/chromium
+
+# Run the agent
+CMD ["node", "src/index.js"]

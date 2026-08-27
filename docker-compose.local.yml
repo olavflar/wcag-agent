@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # WCAG Testing Agent
+  wcag-testing-agent:
+    build:
+      context: .
+      dockerfile: agents/wcag-testing/Dockerfile-wcag-testing
+    container_name: wcag-testing-agent
+    environment:
+      AGENT_NAME: wcag-testing-agent
+      AGENT_ENV: local
+      SERVER_PORT: 3000
+      SERVER_HOST: 0.0.0.0
+      WCAG_LEVEL: AA
+      REPORT_FORMAT: html
+      LOG_LEVEL: info
+      REDIS_URL: redis://redis:6379
+      ALTINN_STUDIO_URL: http://altinn-studio-mock:3002
+      CHROMIUM_BIN: /usr/bin/chromium
+
+    ports:
+      - "3010:3000"
+
+    volumes:
+      - ./agents/wcag-testing/instructions-wcag-testing.md:/home/agent/instructions.md:ro
+      - ./agents/wcag-testing/agent-wcag-testing.yaml:/home/agent/agent.yaml:ro
+      - wcag-testing-reports:/home/agent/reports
+      - wcag-testing-temp:/tmp/test-apps
+
+    networks:
+      - agent-network
+
+    depends_on:
+      - redis
+      - altinn-studio-mock
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    stdin_open: true
+    tty: true
+
+  # Mock Altinn Studio
+  altinn-studio-mock:
+    image: node:20-alpine
+    container_name: altinn-studio-mock
+    working_dir: /app
+    volumes:
+      - ./scripts/altinn-studio-mock.js:/app/mock.js
+    ports:
+      - "3002:3002"
+    networks:
+      - agent-network
+    environment:
+      PORT: 3002
+    command: sh -c "npm install express && node /app/mock.js"
+
+  # Redis for state storage
+  redis:
+    image: redis:7-alpine
+    container_name: redis-wcag
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - agent-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  wcag-testing-reports:
+    driver: local
+  wcag-testing-temp:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  agent-network:
+    driver: bridge
