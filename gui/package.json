@@ -1,0 +1,15 @@
+{
+  "name": "wcag-studio-gui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local GUI to pick a local Altinn Studio test app, run it, and WCAG-scan its pages",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@axe-core/puppeteer": "^4.10.0",
+    "express": "^4.19.2",
+    "puppeteer": "^23.0.0"
+  }
+}

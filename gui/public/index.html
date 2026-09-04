@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>WCAG Studio Test Runner</title>
+<style>
+  :root {
+    --blue: #003399;
+    --blue-dark: #002266;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #dde1e6;
+    --text: #1a1a1a;
+    --muted: #5a6472;
+    --red: #b3261e;
+    --green: #1e7d32;
+    --amber: #92620a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    background: var(--blue);
+    color: white;
+    padding: 20px 28px;
+  }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: 0.85; }
+  main {
+    max-width: 960px;
+    margin: 24px auto;
+    padding: 0 20px 60px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .controls {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  select, button {
+    font-size: 14px;
+    padding: 9px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  select { min-width: 260px; }
+  button {
+    background: var(--blue);
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button:hover:not(:disabled) { background: var(--blue-dark); }
+  button.secondary {
+    background: white;
+    color: var(--blue);
+    border: 1px solid var(--blue);
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #status {
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--muted);
+    white-space: pre-line;
+  }
+  #status.error { color: var(--red); font-weight: 600; }
+  .summary {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    flex: 1;
+    min-width: 120px;
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 12px 16px;
+    text-align: center;
+  }
+  .stat .n { font-size: 24px; font-weight: 700; }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  .stat.fail .n { color: var(--red); }
+  .stat.pass .n { color: var(--green); }
+  .stat.warn .n { color: var(--amber); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  tr.violation-row { cursor: pointer; }
+  tr.violation-row:hover { background: #fafafa; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.ok { background: #e6f4ea; color: var(--green); }
+  .badge.fail { background: #fce8e6; color: var(--red); }
+  .details {
+    display: none;
+    background: #fbfbfb;
+    padding: 10px 14px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .details.open { display: table-cell; }
+  .details code {
+    display: block;
+    background: #eef0f3;
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin-top: 3px;
+    word-break: break-all;
+  }
+  a.applink { color: var(--blue); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WCAG Studio Test Runner</h1>
+  <p>Pick a local Altinn Studio test app, launch it, and run a full axe-core accessibility scan across its pages.</p>
+</header>
+
+<main>
+  <div class="card">
+    <div class="controls">
+      <div>
+        <label for="appSelect">App</label>
+        <select id="appSelect"></select>
+      </div>
+      <div>
+        <label for="levelSelect">WCAG level</label>
+        <select id="levelSelect">
+          <option value="A">A</option>
+          <option value="AA" selected>AA</option>
+          <option value="AAA">AAA</option>
+        </select>
+      </div>
+      <button id="startBtn" class="secondary">Start app only</button>
+      <button id="scanBtn">Run WCAG scan</button>
+    </div>
+    <div id="status"></div>
+    <div id="appLinkWrap" style="margin-top:8px;"></div>
+  </div>
+
+  <div id="resultsCard" class="card" style="display:none;">
+    <div class="summary" id="summary"></div>
+    <p style="font-size:12px;color:var(--muted);margin-top:14px;">
+      Scans the pages in the app's current process step (the numbered page navigation, when the app has one).
+      Multi-step processes (e.g. a payment or signing step further along) aren't followed automatically.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Page</th><th>Passed</th><th>Violations</th><th>Critical</th><th>Incomplete</th></tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const appSelect = document.getElementById('appSelect');
+const levelSelect = document.getElementById('levelSelect');
+const startBtn = document.getElementById('startBtn');
+const scanBtn = document.getElementById('scanBtn');
+const statusEl = document.getElementById('status');
+const appLinkWrap = document.getElementById('appLinkWrap');
+const resultsCard = document.getElementById('resultsCard');
+const summaryEl = document.getElementById('summary');
+const resultsBody = document.getElementById('resultsBody');
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setStatus(text, isError) {
+  statusEl.textContent = text;
+  statusEl.className = isError ? 'error' : '';
+}
+
+function setBusy(busy) {
+  startBtn.disabled = busy;
+  scanBtn.disabled = busy;
+  appSelect.disabled = busy;
+  levelSelect.disabled = busy;
+}
+
+async function loadApps() {
+  const res = await fetch('/api/apps');
+  const data = await res.json();
+  appSelect.innerHTML = data.apps.map((a) => `<option value="${a.id}">${a.label}</option>`).join('');
+}
+
+startBtn.addEventListener('click', async () => {
+  setBusy(true);
+  appLinkWrap.innerHTML = '';
+  setStatus('Starting app (this can take a minute the first time)...');
+  try {
+    const res = await fetch(`/api/apps/${appSelect.value}/start`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to start app');
+    setStatus(`Started ${data.app}.`);
+    appLinkWrap.innerHTML = `<a class="applink" href="${escapeHtml(data.url)}" target="_blank" rel="noopener">Open ${escapeHtml(data.url)}</a>`;
+  } catch (err) {
+    setStatus(err.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
+scanBtn.addEventListener('click', async () => {
+  setBusy(true);
+  resultsCard.style.display = 'none';
+  appLinkWrap.innerHTML = '';
+  setStatus('Starting app and running scan (login + page-by-page axe-core scan)...\nThis can take one to a few minutes depending on how many pages the app has.');
+  try {
+    const res = await fetch(`/api/apps/${appSelect.value}/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wcagLevel: levelSelect.value })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Scan failed');
+    renderResults(data);
+    setStatus(`Done. Scanned ${data.pagesScanned} page(s).`);
+  } catch (err) {
+    setStatus(err.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
+function renderResults(data) {
+  resultsCard.style.display = 'block';
+  const s = data.summary;
+  summaryEl.innerHTML = `
+    <div class="stat ${s.status === 'PASS' ? 'pass' : 'fail'}">
+      <div class="n">${s.status}</div><div class="l">Overall</div>
+    </div>
+    <div class="stat"><div class="n">${data.pagesScanned}</div><div class="l">Pages scanned</div></div>
+    <div class="stat pass"><div class="n">${s.totalPassed}</div><div class="l">Passed checks</div></div>
+    <div class="stat ${s.totalViolations ? 'fail' : 'pass'}"><div class="n">${s.totalViolations}</div><div class="l">Violations</div></div>
+    <div class="stat ${s.totalCritical ? 'fail' : 'pass'}"><div class="n">${s.totalCritical}</div><div class="l">Critical</div></div>
+    <div class="stat warn"><div class="n">${s.totalIncomplete}</div><div class="l">Needs review</div></div>
+  `;
+
+  resultsBody.innerHTML = '';
+  data.pages.forEach((p, idx) => {
+    const row = document.createElement('tr');
+    if (p.error) {
+      row.innerHTML = `<td>${escapeHtml(p.page)}</td><td colspan="4" style="color:var(--red)">Error: ${escapeHtml(p.error)}</td>`;
+      resultsBody.appendChild(row);
+      return;
+    }
+    row.className = p.violations > 0 ? 'violation-row' : '';
+    row.innerHTML = `
+      <td>${escapeHtml(p.page)}${p.url ? ` <a class="applink" href="${escapeHtml(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open this page in the app">↗</a>` : ''}</td>
+      <td>${p.passed}</td>
+      <td><span class="badge ${p.violations ? 'fail' : 'ok'}">${p.violations}</span></td>
+      <td>${p.critical}</td>
+      <td>${p.incomplete}</td>
+    `;
+    resultsBody.appendChild(row);
+
+    if (p.violations > 0) {
+      const detailRow = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.className = 'details';
+      cell.id = `details-${idx}`;
+      cell.innerHTML = p.details.map((d) => `
+        <div style="margin-bottom:8px;">
+          <strong>${escapeHtml(d.id)}</strong> (${escapeHtml(d.impact)}) — ${escapeHtml(d.help)}, ${d.nodes} node(s)
+          ${p.url ? `<a class="applink" href="${escapeHtml(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="margin-left:8px;">Manual check ↗</a>` : ''}
+          ${d.targets.map((t) => `<code>${escapeHtml(t)}</code>`).join('')}
+        </div>
+      `).join('');
+      detailRow.appendChild(cell);
+      resultsBody.appendChild(detailRow);
+
+      row.addEventListener('click', () => {
+        cell.classList.toggle('open');
+      });
+    }
+  });
+}
+
+loadApps();
+</script>
+</body>
+</html>
