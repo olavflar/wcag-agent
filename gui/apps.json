@@ -1,6 +1,6 @@
 [
-  { "id": "component-library", "label": "Component Library (all components)" },
-  { "id": "payment-test", "label": "Payment Test" },
-  { "id": "signing-test", "label": "Signing Test" },
-  { "id": "subform-test", "label": "Subform Test" }
+  { "id": "component-library", "label": "Komponentbibliotek (alle komponenter)" },
+  { "id": "payment-test", "label": "Betalingstest" },
+  { "id": "signing-test", "label": "Signeringstest" },
+  { "id": "subform-test", "label": "Underskjema-test" }
 ]
