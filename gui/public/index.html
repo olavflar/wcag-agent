@@ -188,6 +188,9 @@ scanBtn.addEventListener('click', async () => {
     if (!res.ok) throw new Error(data.error || 'Skanning feilet');
     renderResults(data);
     setStatus(`Ferdig. Skannet ${data.pagesScanned} side(r).`);
+    if (data.report) {
+      appLinkWrap.innerHTML = `<a class="ds-link" href="${escapeHtml(data.report.url)}" target="_blank" rel="noopener">Åpne full rapport med skjermbilder ↗</a>`;
+    }
   } catch (err) {
     setStatus(err.message, true);
   } finally {
@@ -210,6 +213,11 @@ function renderResults(data) {
     <div class="stat warn"><div class="n">${s.totalIncomplete}</div><div class="l">Trenger gjennomgang</div></div>
   `;
 
+  const reportId = data.report && data.report.id;
+  function screenshotUrl(p) {
+    return reportId && p.screenshot ? `/reports/${reportId}/${p.screenshot}` : null;
+  }
+
   resultsBody.innerHTML = '';
   data.pages.forEach((p, idx) => {
     const row = document.createElement('tr');
@@ -218,9 +226,10 @@ function renderResults(data) {
       resultsBody.appendChild(row);
       return;
     }
+    const shotUrl = screenshotUrl(p);
     row.className = p.violations > 0 ? 'violation-row' : '';
     row.innerHTML = `
-      <td>${escapeHtml(p.page)}${p.url ? ` <a class="ds-link" href="${escapeHtml(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Åpne denne siden i appen">↗</a>` : ''}</td>
+      <td>${escapeHtml(p.page)}${p.url ? ` <a class="ds-link" href="${escapeHtml(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Åpne denne siden i appen">↗</a>` : ''}${shotUrl ? ` <a class="ds-link" href="${escapeHtml(shotUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Se skjermbilde">📷</a>` : ''}</td>
       <td>${p.passed}</td>
       <td><span class="ds-tag" data-color="${p.violations ? 'danger' : 'success'}">${p.violations}</span></td>
       <td>${p.critical}</td>
