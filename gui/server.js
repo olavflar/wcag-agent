@@ -9,6 +9,14 @@ const { AxePuppeteer } = require('@axe-core/puppeteer');
 
 const apps = require('./apps.json');
 
+// Force-closing the Puppeteer browser mid-operation (used to interrupt a
+// cancelled scan immediately) can trigger internal CDP-session rejections
+// that aren't part of any promise chain our own code awaits. Without this,
+// one of those crashes the whole server with ERR_UNHANDLED_REJECTION.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection (ignored to keep server alive):', reason);
+});
+
 const execFileAsync = promisify(execFile);
 const REPORTS_DIR = path.join(__dirname, 'reports');
 fs.mkdirSync(REPORTS_DIR, { recursive: true });
@@ -30,6 +38,7 @@ const WCAG_TAGS = {
 };
 
 let currentAppId = null;
+let currentScan = null; // { cancelled: boolean, browser: puppeteer.Browser|null }
 
 function findApp(id) {
   const app = apps.find((a) => a.id === id);
@@ -180,7 +189,7 @@ async function screenshotPage(page, screenshotDir, index, label, axeResults) {
   return filename;
 }
 
-async function discoverAndScanPages(page, tags, screenshotDir) {
+async function discoverAndScanPages(page, tags, screenshotDir, isCancelled = () => false) {
   // The numbered pill/tab navigation ("1. Kort svar", "2. Langt svar", ...) is
   // the standard app-frontend multi-page task navigation and shows up the same
   // way across apps (component-library, payment-test, ...), unlike the grouped
@@ -197,18 +206,21 @@ async function discoverAndScanPages(page, tags, screenshotDir) {
 
   if (total === 0) {
     // Single-page task: no pill navigation, just scan whatever is on screen.
+    if (isCancelled()) return results;
     const title = await page.title();
     try {
       const axeResults = await new AxePuppeteer(page).withTags(tags).analyze();
       const screenshot = await screenshotPage(page, screenshotDir, 1, title, axeResults);
       results.push(buildPageResult(title, page.url(), axeResults, screenshot));
     } catch (error) {
-      results.push({ page: title, error: error.message });
+      if (!isCancelled()) results.push({ page: title, error: error.message });
     }
     return results;
   }
 
   for (let i = 0; i < total; i++) {
+    if (isCancelled()) break;
+
     const clickInfo = await page.evaluate((idx) => {
       const buttons = window.__wcagFindNavButtons();
       const btn = buttons[idx];
@@ -226,6 +238,7 @@ async function discoverAndScanPages(page, tags, screenshotDir) {
       const screenshot = await screenshotPage(page, screenshotDir, i + 1, clickInfo.text, axeResults);
       results.push(buildPageResult(clickInfo.text, page.url(), axeResults, screenshot));
     } catch (error) {
+      if (isCancelled()) break;
       results.push({ page: clickInfo.text, error: error.message });
     }
   }
@@ -240,7 +253,7 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function buildReportHtml({ appId, wcagLevel, timestamp, summary, pages }) {
+function buildReportHtml({ appId, wcagLevel, timestamp, summary, pages, reportId, cancelled }) {
   const statusText = summary.status === 'PASS' ? 'BESTÅTT' : 'IKKE BESTÅTT';
   const pageCards = pages
     .map((p) => {
@@ -303,7 +316,10 @@ function buildReportHtml({ appId, wcagLevel, timestamp, summary, pages }) {
 <body>
 <header>
   <h1>WCAG-rapport: ${escapeHtml(appId)}</h1>
-  <p>WCAG-nivå ${escapeHtml(wcagLevel)} · ${escapeHtml(new Date(timestamp).toLocaleString('no-NO'))}</p>
+  <p>WCAG-nivå ${escapeHtml(wcagLevel)} · ${escapeHtml(new Date(timestamp).toLocaleString('no-NO'))}
+    · <a href="/api/reports/${escapeHtml(reportId)}/download" style="color:white;">Last ned hele rapporten (zip) ↓</a>
+  </p>
+  ${cancelled ? '<p style="background:#fff3cd;color:#664d03;padding:6px 10px;border-radius:4px;display:inline-block;margin-top:8px;">Skanningen ble avbrutt av bruker — rapporten viser kun sidene som ble skannet før avbrudd.</p>' : ''}
 </header>
 <main>
   <div class="summary">
@@ -329,6 +345,39 @@ app.get('/api/apps', (req, res) => {
   res.json({ apps: apps.map((a) => ({ id: a.id, label: a.label })), current: currentAppId });
 });
 
+app.get('/api/reports/:reportId/download', (req, res) => {
+  const { reportId } = req.params;
+  if (!/^[a-zA-Z0-9_-]+$/.test(reportId)) {
+    return res.status(400).json({ error: 'Ugyldig rapport-id' });
+  }
+  const reportDir = path.join(REPORTS_DIR, reportId);
+  if (!fs.existsSync(reportDir)) {
+    return res.status(404).json({ error: 'Rapport ikke funnet' });
+  }
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${reportId}.zip"`);
+
+  const zip = spawn('zip', ['-r', '-', '.'], { cwd: reportDir });
+  zip.stdout.pipe(res);
+  zip.on('error', (error) => {
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  });
+});
+
+app.post('/api/scan/cancel', async (req, res) => {
+  if (!currentScan) {
+    return res.json({ cancelled: false, message: 'Ingen aktiv skanning' });
+  }
+  currentScan.cancelled = true;
+  // Closing the browser interrupts any in-flight axe analyze()/screenshot call
+  // immediately instead of waiting for it to finish naturally.
+  if (currentScan.browser) {
+    await currentScan.browser.close().catch(() => {});
+  }
+  res.json({ cancelled: true });
+});
+
 app.post('/api/apps/:id/start', async (req, res) => {
   try {
     const appConfig = findApp(req.params.id);
@@ -347,10 +396,17 @@ app.post('/api/apps/:id/start', async (req, res) => {
 app.post('/api/apps/:id/scan', async (req, res) => {
   const wcagLevel = req.body?.wcagLevel || 'AA';
   const tags = WCAG_TAGS[wcagLevel] || WCAG_TAGS.AA;
+  const scan = { cancelled: false, browser: null };
+  currentScan = scan;
   let browser;
   try {
     const appConfig = findApp(req.params.id);
     await startApp(appConfig);
+
+    if (scan.cancelled) {
+      res.json({ cancelled: true, message: 'Skanning avbrutt av bruker' });
+      return;
+    }
 
     const timestamp = new Date().toISOString();
     const reportId = `${appConfig.id}-${timestamp.replace(/[:.]/g, '-')}`;
@@ -358,6 +414,7 @@ app.post('/api/apps/:id/scan', async (req, res) => {
     fs.mkdirSync(reportDir, { recursive: true });
 
     browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    scan.browser = browser;
     const page = await browser.newPage();
     await page.setViewport({ width: 1400, height: 900 });
 
@@ -380,7 +437,7 @@ app.post('/api/apps/:id/scan', async (req, res) => {
       )
       .catch(() => {});
 
-    const results = await discoverAndScanPages(page, tags, reportDir);
+    const results = await discoverAndScanPages(page, tags, reportDir, () => scan.cancelled);
 
     const totalViolations = results.reduce((s, r) => s + (r.violations || 0), 0);
     const totalCritical = results.reduce((s, r) => s + (r.critical || 0), 0);
@@ -391,10 +448,11 @@ app.post('/api/apps/:id/scan', async (req, res) => {
       totalViolations,
       totalCritical,
       totalPassed,
-      totalIncomplete
+      totalIncomplete,
+      cancelled: scan.cancelled
     };
 
-    const reportHtml = buildReportHtml({ appId: appConfig.id, wcagLevel, timestamp, summary, pages: results });
+    const reportHtml = buildReportHtml({ appId: appConfig.id, wcagLevel, timestamp, summary, pages: results, reportId, cancelled: scan.cancelled });
     fs.writeFileSync(path.join(reportDir, 'index.html'), reportHtml);
     fs.writeFileSync(
       path.join(reportDir, 'report.json'),
@@ -408,12 +466,18 @@ app.post('/api/apps/:id/scan', async (req, res) => {
       summary,
       pages: results,
       report: { id: reportId, url: `/reports/${reportId}/index.html` },
-      timestamp
+      timestamp,
+      cancelled: scan.cancelled
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (scan.cancelled) {
+      res.json({ cancelled: true, message: 'Skanning avbrutt av bruker' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
   } finally {
-    if (browser) await browser.close();
+    if (browser) await browser.close().catch(() => {});
+    if (currentScan === scan) currentScan = null;
   }
 });
 

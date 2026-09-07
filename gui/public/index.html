@@ -99,6 +99,7 @@
       </div>
       <button id="startBtn" class="ds-button" data-variant="secondary" type="button">Bare start appen</button>
       <button id="scanBtn" class="ds-button" type="button">Kjør WCAG-skanning</button>
+      <button id="cancelBtn" class="ds-button" data-variant="secondary" type="button" style="display:none;">Avbryt skanning</button>
     </div>
     <div id="status" class="muted"></div>
     <div id="appLinkWrap" style="margin-top:8px;"></div>
@@ -124,6 +125,7 @@ const appSelect = document.getElementById('appSelect');
 const levelSelect = document.getElementById('levelSelect');
 const startBtn = document.getElementById('startBtn');
 const scanBtn = document.getElementById('scanBtn');
+const cancelBtn = document.getElementById('cancelBtn');
 const statusEl = document.getElementById('status');
 const appLinkWrap = document.getElementById('appLinkWrap');
 const resultsCard = document.getElementById('resultsCard');
@@ -175,6 +177,9 @@ startBtn.addEventListener('click', async () => {
 
 scanBtn.addEventListener('click', async () => {
   setBusy(true);
+  cancelBtn.style.display = 'inline-flex';
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = 'Avbryt skanning';
   resultsCard.style.display = 'none';
   appLinkWrap.innerHTML = '';
   setStatus('Starter appen og kjører skanning (innlogging + side-for-side axe-core-skanning)...\nDette kan ta ett til noen minutter avhengig av hvor mange sider appen har.');
@@ -186,15 +191,35 @@ scanBtn.addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Skanning feilet');
-    renderResults(data);
-    setStatus(`Ferdig. Skannet ${data.pagesScanned} side(r).`);
+
+    if (data.pagesScanned !== undefined) {
+      renderResults(data);
+    }
+    if (data.cancelled) {
+      setStatus(`Skanning avbrutt av bruker.${data.pagesScanned ? ` Skannet ${data.pagesScanned} side(r) før avbrudd.` : ''}`);
+    } else {
+      setStatus(`Ferdig. Skannet ${data.pagesScanned} side(r).`);
+    }
     if (data.report) {
-      appLinkWrap.innerHTML = `<a class="ds-link" href="${escapeHtml(data.report.url)}" target="_blank" rel="noopener">Åpne full rapport med skjermbilder ↗</a>`;
+      appLinkWrap.innerHTML = `<a class="ds-link" href="${escapeHtml(data.report.url)}" target="_blank" rel="noopener">Åpne full rapport med skjermbilder ↗</a>` +
+        ` &nbsp;·&nbsp; <a class="ds-link" href="/api/reports/${escapeHtml(data.report.id)}/download">Last ned hele rapporten (zip) ↓</a>`;
     }
   } catch (err) {
     setStatus(err.message, true);
   } finally {
     setBusy(false);
+    cancelBtn.style.display = 'none';
+  }
+});
+
+cancelBtn.addEventListener('click', async () => {
+  cancelBtn.disabled = true;
+  cancelBtn.textContent = 'Avbryter...';
+  setStatus('Avbryter skanning...');
+  try {
+    await fetch('/api/scan/cancel', { method: 'POST' });
+  } catch (err) {
+    // ignore — the scan request's own finally block will still clean up the UI
   }
 });
 
