@@ -24,8 +24,10 @@ fs.mkdirSync(REPORTS_DIR, { recursive: true });
 const BASE_URL = 'http://local.altinn.cloud:8000';
 const ORG = 'ttd';
 const VITE_PORT = 8080;
-const VITE_DIR = path.join(process.env.HOME, 'Altinn-studio/altinn-studio/src/App/frontend');
-const APPS_ROOT = path.join(process.env.HOME, 'Altinn-studio/altinn-studio/src/test/apps');
+const REPO_ROOT = path.join(process.env.HOME, 'Altinn-studio/altinn-studio');
+const VITE_DIR = path.join(REPO_ROOT, 'src/App/frontend');
+const BACKEND_DIR = path.join(REPO_ROOT, 'src/App/backend');
+const APPS_ROOT = path.join(REPO_ROOT, 'src/test/apps');
 // DDG Fitness AS, acting via Sophie Salt: has DAGL (general manager) role, which
 // covers the broadest set of test-app authorization policies (some apps, like
 // signing-test, require an org role and reject a bare person like Sophie Salt).
@@ -39,6 +41,32 @@ const WCAG_TAGS = {
 
 let currentAppId = null;
 let currentScan = null; // { cancelled: boolean, browser: puppeteer.Browser|null }
+
+// Frontend (--dev-frontend serves live Vite source) and backend (Altinn.App.Core/Api
+// are ProjectReferences to local monorepo source, not pinned NuGet packages) both run
+// off whatever commit happens to be checked out — there's no separate version number
+// to read. Git HEAD for each subtree is the only real "version" available.
+async function getGitInfo(dir) {
+  try {
+    const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%h|%ad|%s', '--date=short', '--', '.'], {
+      cwd: dir
+    });
+    const [commit, date, ...subjectParts] = stdout.trim().split('|');
+    const { stdout: dirtyOut } = await execFileAsync('git', ['status', '--porcelain', '--', '.'], { cwd: dir });
+    return { commit, date, subject: subjectParts.join('|'), dirty: dirtyOut.trim().length > 0 };
+  } catch (error) {
+    return { commit: null, date: null, subject: null, error: error.message };
+  }
+}
+
+async function getVersionInfo(appConfig) {
+  const [frontend, backend, app] = await Promise.all([
+    getGitInfo(VITE_DIR),
+    getGitInfo(BACKEND_DIR),
+    getGitInfo(appConfig.path)
+  ]);
+  return { frontend, backend, app };
+}
 
 function findApp(id) {
   const app = apps.find((a) => a.id === id);
@@ -253,7 +281,13 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function buildReportHtml({ appId, wcagLevel, timestamp, summary, pages, reportId, cancelled }) {
+function formatVersion(info) {
+  if (!info || !info.commit) return 'ukjent';
+  const dirty = info.dirty ? ' +lokale endringer' : '';
+  return `${info.commit} (${info.date})${dirty}`;
+}
+
+function buildReportHtml({ appId, wcagLevel, timestamp, summary, pages, reportId, cancelled, versions }) {
   const statusText = summary.status === 'PASS' ? 'BESTÅTT' : 'IKKE BESTÅTT';
   const pageCards = pages
     .map((p) => {
@@ -319,6 +353,9 @@ function buildReportHtml({ appId, wcagLevel, timestamp, summary, pages, reportId
   <p>WCAG-nivå ${escapeHtml(wcagLevel)} · ${escapeHtml(new Date(timestamp).toLocaleString('no-NO'))}
     · <a href="/api/reports/${escapeHtml(reportId)}/download" style="color:white;">Last ned hele rapporten (zip) ↓</a>
   </p>
+  ${versions ? `<p style="font-size:12px;opacity:0.85;margin-top:4px;">
+    App: ${escapeHtml(formatVersion(versions.app))} · Frontend: ${escapeHtml(formatVersion(versions.frontend))} · Backend: ${escapeHtml(formatVersion(versions.backend))}
+  </p>` : ''}
   ${cancelled ? '<p style="background:#fff3cd;color:#664d03;padding:6px 10px;border-radius:4px;display:inline-block;margin-top:8px;">Skanningen ble avbrutt av bruker — rapporten viser kun sidene som ble skannet før avbrudd.</p>' : ''}
 </header>
 <main>
@@ -343,6 +380,16 @@ app.use('/reports', express.static(REPORTS_DIR));
 
 app.get('/api/apps', (req, res) => {
   res.json({ apps: apps.map((a) => ({ id: a.id, label: a.label })), current: currentAppId });
+});
+
+app.get('/api/apps/:id/version', async (req, res) => {
+  try {
+    const appConfig = findApp(req.params.id);
+    const versions = await getVersionInfo(appConfig);
+    res.json({ app: appConfig.id, versions });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get('/api/reports/:reportId/download', (req, res) => {
@@ -393,6 +440,29 @@ app.post('/api/apps/:id/start', async (req, res) => {
   }
 });
 
+app.post('/api/apps/:id/update', async (req, res) => {
+  try {
+    const appConfig = findApp(req.params.id);
+    const args = ['app', 'update', '-p', appConfig.path];
+    if (req.body?.allowMajor) args.push('-allow-major');
+    // studioctl currently exits 0 even for its "not yet implemented" stub reply,
+    // but a real implementation could fail (dirty tree, merge conflicts, ...),
+    // so stdout/stderr are captured from the error object on a non-zero exit too.
+    try {
+      const { stdout, stderr } = await execFileAsync('studioctl', args, { timeout: 180000 });
+      res.json({ app: appConfig.id, success: true, output: (stdout + stderr).trim() });
+    } catch (execError) {
+      res.json({
+        app: appConfig.id,
+        success: false,
+        output: ((execError.stdout || '') + (execError.stderr || '') || execError.message).trim()
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/apps/:id/scan', async (req, res) => {
   const wcagLevel = req.body?.wcagLevel || 'AA';
   const tags = WCAG_TAGS[wcagLevel] || WCAG_TAGS.AA;
@@ -408,6 +478,7 @@ app.post('/api/apps/:id/scan', async (req, res) => {
       return;
     }
 
+    const versions = await getVersionInfo(appConfig);
     const timestamp = new Date().toISOString();
     const reportId = `${appConfig.id}-${timestamp.replace(/[:.]/g, '-')}`;
     const reportDir = path.join(REPORTS_DIR, reportId);
@@ -452,16 +523,17 @@ app.post('/api/apps/:id/scan', async (req, res) => {
       cancelled: scan.cancelled
     };
 
-    const reportHtml = buildReportHtml({ appId: appConfig.id, wcagLevel, timestamp, summary, pages: results, reportId, cancelled: scan.cancelled });
+    const reportHtml = buildReportHtml({ appId: appConfig.id, wcagLevel, timestamp, summary, pages: results, reportId, cancelled: scan.cancelled, versions });
     fs.writeFileSync(path.join(reportDir, 'index.html'), reportHtml);
     fs.writeFileSync(
       path.join(reportDir, 'report.json'),
-      JSON.stringify({ app: appConfig.id, wcagLevel, timestamp, summary, pages: results }, null, 2)
+      JSON.stringify({ app: appConfig.id, wcagLevel, timestamp, versions, summary, pages: results }, null, 2)
     );
 
     res.json({
       app: appConfig.id,
       wcagLevel,
+      versions,
       pagesScanned: results.length,
       summary,
       pages: results,

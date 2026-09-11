@@ -88,6 +88,7 @@
       <div class="ds-field">
         <label class="ds-label" for="appSelect">App</label>
         <select id="appSelect" class="ds-input"></select>
+        <div id="appVersionInfo" style="font-size:12px;color:var(--ds-color-neutral-text-subtle);margin-top:4px;"></div>
       </div>
       <div class="ds-field">
         <label class="ds-label" for="levelSelect">WCAG-nivå</label>
@@ -98,6 +99,7 @@
         </select>
       </div>
       <button id="startBtn" class="ds-button" data-variant="secondary" type="button">Bare start appen</button>
+      <button id="updateBtn" class="ds-button" data-variant="secondary" type="button" title="Kjører studioctl app update (NuGet-pakker + frontend)">Oppdater app</button>
       <button id="scanBtn" class="ds-button" type="button">Kjør WCAG-skanning</button>
       <button id="cancelBtn" class="ds-button" data-variant="secondary" type="button" style="display:none;">Avbryt skanning</button>
     </div>
@@ -107,6 +109,7 @@
 
   <section id="resultsCard" class="ds-card" style="display:none;">
     <div class="summary" id="summary"></div>
+    <p id="versionInfo" style="font-size:12px;color:var(--ds-color-neutral-text-subtle);margin-top:12px;"></p>
     <p style="font-size:13px;color:var(--ds-color-neutral-text-subtle);margin-top:16px;">
       Skanner sidene i appens gjeldende prosessteg (den nummererte sidenavigasjonen, når appen har en).
       Flerstegsprosesser (f.eks. et betalings- eller signeringssteg lenger ute) følges ikke automatisk.
@@ -124,6 +127,7 @@
 const appSelect = document.getElementById('appSelect');
 const levelSelect = document.getElementById('levelSelect');
 const startBtn = document.getElementById('startBtn');
+const updateBtn = document.getElementById('updateBtn');
 const scanBtn = document.getElementById('scanBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 const statusEl = document.getElementById('status');
@@ -147,16 +151,40 @@ function setStatus(text, isError) {
 
 function setBusy(busy) {
   startBtn.disabled = busy;
+  updateBtn.disabled = busy;
   scanBtn.disabled = busy;
   appSelect.disabled = busy;
   levelSelect.disabled = busy;
+}
+
+const appVersionInfoEl = document.getElementById('appVersionInfo');
+
+async function loadAppVersion() {
+  const appId = appSelect.value;
+  if (!appId) {
+    appVersionInfoEl.textContent = '';
+    return;
+  }
+  appVersionInfoEl.textContent = 'Henter versjon...';
+  try {
+    const res = await fetch(`/api/apps/${appId}/version`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Klarte ikke å hente versjon');
+    const v = data.versions;
+    appVersionInfoEl.textContent = `App: ${formatVersion(v.app)} · Frontend: ${formatVersion(v.frontend)} · Backend: ${formatVersion(v.backend)}`;
+  } catch (err) {
+    appVersionInfoEl.textContent = `Klarte ikke å hente versjon: ${err.message}`;
+  }
 }
 
 async function loadApps() {
   const res = await fetch('/api/apps');
   const data = await res.json();
   appSelect.innerHTML = data.apps.map((a) => `<option value="${a.id}">${a.label}</option>`).join('');
+  loadAppVersion();
 }
+
+appSelect.addEventListener('change', loadAppVersion);
 
 startBtn.addEventListener('click', async () => {
   setBusy(true);
@@ -168,6 +196,23 @@ startBtn.addEventListener('click', async () => {
     if (!res.ok) throw new Error(data.error || 'Klarte ikke å starte appen');
     setStatus(`Startet ${data.app}.`);
     appLinkWrap.innerHTML = `<a class="ds-link" href="${escapeHtml(data.url)}" target="_blank" rel="noopener">Åpne ${escapeHtml(data.url)}</a>`;
+  } catch (err) {
+    setStatus(err.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
+updateBtn.addEventListener('click', async () => {
+  setBusy(true);
+  appLinkWrap.innerHTML = '';
+  setStatus('Oppdaterer app (studioctl app update — NuGet-pakker + frontend)...');
+  try {
+    const res = await fetch(`/api/apps/${appSelect.value}/update`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Klarte ikke å oppdatere appen');
+    setStatus(`${data.success ? 'Oppdatering fullført' : 'Oppdatering feilet'} for ${data.app}:\n${data.output}`, !data.success);
+    loadAppVersion();
   } catch (err) {
     setStatus(err.message, true);
   } finally {
@@ -223,6 +268,11 @@ cancelBtn.addEventListener('click', async () => {
   }
 });
 
+function formatVersion(info) {
+  if (!info || !info.commit) return 'ukjent';
+  return `${info.commit} (${info.date})${info.dirty ? ' +lokale endringer' : ''}`;
+}
+
 function renderResults(data) {
   resultsCard.style.display = 'block';
   const s = data.summary;
@@ -237,6 +287,13 @@ function renderResults(data) {
     <div class="stat ${s.totalCritical ? 'fail' : 'pass'}"><div class="n">${s.totalCritical}</div><div class="l">Kritisk</div></div>
     <div class="stat warn"><div class="n">${s.totalIncomplete}</div><div class="l">Trenger gjennomgang</div></div>
   `;
+
+  const versionEl = document.getElementById('versionInfo');
+  if (data.versions) {
+    versionEl.textContent = `App: ${formatVersion(data.versions.app)} · Frontend: ${formatVersion(data.versions.frontend)} · Backend: ${formatVersion(data.versions.backend)}`;
+  } else {
+    versionEl.textContent = '';
+  }
 
   const reportId = data.report && data.report.id;
   function screenshotUrl(p) {

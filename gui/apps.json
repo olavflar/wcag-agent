@@ -1,6 +1,16 @@
 [
   { "id": "component-library", "label": "Komponentbibliotek (alle komponenter)" },
+  { "id": "component-library-52", "label": "Komponentbibliotek (52 komponenter, gruppert meny)" },
   { "id": "payment-test", "label": "Betalingstest" },
   { "id": "signing-test", "label": "Signeringstest" },
-  { "id": "subform-test", "label": "Underskjema-test" }
+  { "id": "subform-test", "label": "Underskjema-test" },
+  { "id": "anonymous-stateless-app", "label": "Anonym stateless-app" },
+  { "id": "expression-validation-test", "label": "Expression-validering" },
+  { "id": "frontend-test", "label": "Frontend-test (stor testapp)" },
+  { "id": "multiple-datamodels-test", "label": "Flere datamodeller-test" },
+  { "id": "navigation-test-subform", "label": "Navigasjonstest (underskjema)" },
+  { "id": "process-transition-test", "label": "Prosessoverganger-test" },
+  { "id": "service-task", "label": "Service task-test" },
+  { "id": "signering-brukerstyrt", "label": "Signering, brukerstyrt (Stiftelse av AS)" },
+  { "id": "stateless-app", "label": "Stateless-app" }
 ]
