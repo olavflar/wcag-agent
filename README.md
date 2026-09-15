@@ -72,7 +72,49 @@ agents/wcag-testing/
   src/wcag-tester.js             Puppeteer + axe-core scan logic
   agent-wcag-testing.yaml        Agent manifest / governance config
   *.md                           Design docs, integration guide, architecture summary
+gui/                              Local GUI test runner — see below, separate tool/prerequisites
 ```
+
+## GUI test runner (`gui/`)
+
+A separate, standalone tool (not part of the Docker Compose stack above) that lets you pick a real
+local Altinn Studio test app from a dropdown, start it, and run a full axe-core scan across its pages
+from the browser — no `curl`/API calls needed. It runs as a plain Node process on the host because it
+needs to shell out to `studioctl` and reach `local.altinn.cloud` directly, which a container can't do
+without extra networking setup.
+
+### Prerequisites
+
+- A local checkout of [`Altinn/altinn-studio`](https://github.com/Altinn/altinn-studio) at
+  `~/Altinn-studio/altinn-studio` (the GUI resolves this path from `$HOME`, so it just needs to exist
+  at that relative location under your home directory).
+- [`studioctl`](https://github.com/Altinn/altinn-studio/tree/main/src/cli) installed and working —
+  it's used to start/stop the test apps. **Note:** `studioctl` is hardwired to **podman**, not Docker
+  Desktop; running `studioctl doctor` should resolve to a Podman-backed Docker Engine API. This is
+  unrelated to the Docker Compose agent above — you need both podman (for this) and Docker Desktop
+  (for the dockerized agent) if you want to use both tools.
+- The local Altinn Studio dev hosts entries in `/etc/hosts` (`local.altinn.cloud` and friends pointing
+  at `127.0.0.1`) — normally already set up as part of the standard Altinn Studio local dev
+  environment.
+- Node.js (any version compatible with Puppeteer 23) and internet access for the one-time `npm
+  install` below, since Puppeteer downloads its own bundled Chromium.
+
+### Setup
+
+```bash
+cd gui
+npm install
+node server.js
+```
+
+Then open `http://localhost:4100` (override with `PORT=<port> node server.js`). Pick an app from the
+dropdown, start it, and run a scan — each run writes a persisted report (HTML + JSON + per-page
+screenshots) to `gui/reports/<app>-<timestamp>/`, git-ignored by default.
+
+### Known limitation
+
+Only scans pages within the app's *current* process step — multi-step flows (e.g. an actual payment
+or signing action past the form pages) aren't followed automatically.
 
 ## Known limitations
 
